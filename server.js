@@ -1,5 +1,6 @@
 // FiveM Item List - backend s autentizací.
-// Záměrně bez externích npm závislostí - běží na čistém Node.js (18+).
+// Žádné externí npm závislosti kromě "pg" (jen když se použije Postgres/Neon
+// pro trvalé úložiště - viz níže). Jinak čistý Node.js (18+).
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
@@ -12,8 +13,84 @@ const { verifyPassword } = require("./lib/password");
 loadEnv();
 
 const PORT = parseInt(process.env.PORT, 10) || 3000;
-const DATA_FILE = path.join(__dirname, "data", "items.json");
 const PUBLIC_DIR = path.join(__dirname, "public");
+
+// ---------------------------------------------------------------------------
+// Úložiště itemů - dva možné režimy:
+//
+// 1) DATABASE_URL nastavená (Postgres, např. free Neon databáze) - itemy se
+//    ukládají do tabulky "items". Tohle přežije restart/redeploy/uspání
+//    Render služby i na free plánu, protože data nejsou na disku Renderu.
+//
+// 2) DATABASE_URL nenastavená - itemy se ukládají do JSON souboru na disku
+//    (DATA_DIR, výchozí "data/items.json"). Lokálně to funguje normálně, ale
+//    na Renderu free plánu tahle složka NENÍ trvalá - při každém
+//    redeployi/restartu/uspání služby se smaže a nahradí verzí z GitHubu.
+//    Aby data přežila restart bez databáze, je potřeba na Renderu připojit
+//    Persistent Disk (vyžaduje placený plán) a nastavit DATA_DIR na jeho
+//    mount path (např. /var/data).
+// ---------------------------------------------------------------------------
+const DATABASE_URL = process.env.DATABASE_URL;
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
+const DATA_FILE = path.join(DATA_DIR, "items.json");
+
+let pool = null;
+if (DATABASE_URL) {
+  const { Pool } = require("pg");
+  pool = new Pool({ connectionString: DATABASE_URL });
+  pool.on("error", (err) => {
+    // Chyba na nečinném klientovi v poolu (např. výpadek spojení při
+    // uspání Neon databáze) - jen zalogovat, ne shodit celý server.
+    console.error("Neočekávaná chyba PostgreSQL připojení:", err);
+  });
+}
+
+// Když DATA_DIR ukazuje na čerstvý/prázdný Persistent Disk (žádný items.json
+// tam ještě není), naplníme ho počátečními daty z repozitáře, ať appka
+// nezačíná s prázdnou databází. Používá se jen v režimu souborového úložiště.
+function ensureDataFile() {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+  if (!fs.existsSync(DATA_FILE)) {
+    const seedFile = path.join(__dirname, "data", "items.json");
+    if (fs.existsSync(seedFile) && seedFile !== DATA_FILE) {
+      fs.copyFileSync(seedFile, DATA_FILE);
+    } else {
+      fs.writeFileSync(DATA_FILE, "[]\n", "utf-8");
+    }
+  }
+}
+
+// Vytvoří tabulku "items" v Postgresu, pokud ještě neexistuje, a při prvním
+// spuštění (prázdná tabulka) ji naplní stejnými počátečními daty jako
+// souborový režim. Používá se jen v režimu Postgres.
+async function ensureDbSchema() {
+  if (!pool) return;
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS items (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      code TEXT NOT NULL,
+      category TEXT NOT NULL
+    )
+  `);
+  const { rows } = await pool.query("SELECT COUNT(*)::int AS count FROM items");
+  if (rows[0].count === 0) {
+    const seedFile = path.join(__dirname, "data", "items.json");
+    if (fs.existsSync(seedFile)) {
+      const seedItems = JSON.parse(fs.readFileSync(seedFile, "utf-8"));
+      for (const item of seedItems) {
+        await pool.query(
+          "INSERT INTO items (id, name, code, category) VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO NOTHING",
+          [item.id, item.name, item.code, item.category]
+        );
+      }
+    }
+  }
+}
+
+if (!pool) ensureDataFile();
 
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME;
 const ADMIN_PASSWORD_HASH = process.env.ADMIN_PASSWORD_HASH;
@@ -91,9 +168,13 @@ function isRateLimited(ip) {
 }
 
 // ---------------------------------------------------------------------------
-// Item storage (JSON soubor)
+// Item storage (Postgres, pokud je nastavená DATABASE_URL, jinak JSON soubor)
 // ---------------------------------------------------------------------------
-function readItems() {
+async function readItems() {
+  if (pool) {
+    const { rows } = await pool.query("SELECT id, name, code, category FROM items ORDER BY name");
+    return rows;
+  }
   try {
     return JSON.parse(fs.readFileSync(DATA_FILE, "utf-8"));
   } catch (err) {
@@ -101,7 +182,27 @@ function readItems() {
   }
 }
 
-function writeItems(items) {
+async function writeItems(items) {
+  if (pool) {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("DELETE FROM items");
+      for (const item of items) {
+        await client.query(
+          "INSERT INTO items (id, name, code, category) VALUES ($1, $2, $3, $4)",
+          [item.id, item.name, item.code, item.category]
+        );
+      }
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+    return;
+  }
   fs.writeFileSync(DATA_FILE, JSON.stringify(items, null, 2), "utf-8");
 }
 
@@ -301,9 +402,9 @@ function requireWriteAuth(req, res) {
   return session;
 }
 
-function handleGetItems(req, res) {
+async function handleGetItems(req, res) {
   if (!requireAuth(req, res)) return;
-  sendJson(res, 200, readItems());
+  sendJson(res, 200, await readItems());
 }
 
 async function handlePostItem(req, res) {
@@ -323,10 +424,10 @@ async function handlePostItem(req, res) {
   }
   const cat = VALID_CATEGORIES.includes(category) ? category : "ostatni";
 
-  const items = readItems();
+  const items = await readItems();
   const item = { id: newId(), name: name.trim(), code: code.trim(), category: cat };
   items.push(item);
-  writeItems(items);
+  await writeItems(items);
   sendJson(res, 201, item);
 }
 
@@ -338,7 +439,7 @@ async function handlePutItem(req, res, id) {
   } catch (err) {
     return sendJson(res, 400, { error: "Neplatný požadavek." });
   }
-  const items = readItems();
+  const items = await readItems();
   const idx = items.findIndex((i) => i.id === id);
   if (idx === -1) return sendJson(res, 404, { error: "Item nenalezen." });
 
@@ -347,7 +448,7 @@ async function handlePutItem(req, res, id) {
   if (code && typeof code === "string" && code.trim()) items[idx].code = code.trim();
   if (category && VALID_CATEGORIES.includes(category)) items[idx].category = category;
 
-  writeItems(items);
+  await writeItems(items);
   sendJson(res, 200, items[idx]);
 }
 
@@ -364,20 +465,20 @@ async function handleBulkDeleteItems(req, res) {
     return sendJson(res, 400, { error: "Chybí seznam ID ke smazání." });
   }
   const idSet = new Set(ids.map(String));
-  const items = readItems();
+  const items = await readItems();
   const remaining = items.filter((i) => !idSet.has(i.id));
   const deleted = items.length - remaining.length;
-  if (deleted > 0) writeItems(remaining);
+  if (deleted > 0) await writeItems(remaining);
   sendJson(res, 200, { deleted });
 }
 
-function handleDeleteItem(req, res, id) {
+async function handleDeleteItem(req, res, id) {
   if (!requireWriteAuth(req, res)) return;
-  const items = readItems();
+  const items = await readItems();
   const idx = items.findIndex((i) => i.id === id);
   if (idx === -1) return sendJson(res, 404, { error: "Item nenalezen." });
   const [removed] = items.splice(idx, 1);
-  writeItems(items);
+  await writeItems(items);
   sendJson(res, 200, removed);
 }
 
@@ -454,7 +555,7 @@ async function handleImport(req, res) {
   const cat = VALID_CATEGORIES.includes(category) ? category : "ostatni";
 
   const parsed = parseLuaItems(lua);
-  const items = readItems();
+  const items = await readItems();
   const existingCodes = new Set(items.map((i) => i.code.toLowerCase()));
   let added = 0;
   let skippedDuplicates = 0;
@@ -469,7 +570,7 @@ async function handleImport(req, res) {
     added++;
   }
 
-  if (added > 0) writeItems(items);
+  if (added > 0) await writeItems(items);
   sendJson(res, 200, { added, skippedDuplicates });
 }
 
@@ -491,7 +592,7 @@ const server = http.createServer(async (req, res) => {
       return handleSession(req, res);
     }
     if (pathname === "/api/items" && req.method === "GET") {
-      return handleGetItems(req, res);
+      return await handleGetItems(req, res);
     }
     if (pathname === "/api/items" && req.method === "POST") {
       return await handlePostItem(req, res);
@@ -507,7 +608,7 @@ const server = http.createServer(async (req, res) => {
       return await handlePutItem(req, res, itemMatch[1]);
     }
     if (itemMatch && req.method === "DELETE") {
-      return handleDeleteItem(req, res, itemMatch[1]);
+      return await handleDeleteItem(req, res, itemMatch[1]);
     }
     if (pathname.startsWith("/api/")) {
       return sendJson(res, 404, { error: "Endpoint nenalezen." });
@@ -521,6 +622,16 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
-  console.log(`FiveM Item List backend běží na http://localhost:${PORT}`);
-});
+ensureDbSchema()
+  .then(() => {
+    server.listen(PORT, () => {
+      console.log(
+        `FiveM Item List backend běží na http://localhost:${PORT}` +
+        (pool ? " (úložiště: Postgres)" : " (úložiště: soubor)")
+      );
+    });
+  })
+  .catch((err) => {
+    console.error("Nepodařilo se připravit databázi:", err);
+    process.exit(1);
+  });

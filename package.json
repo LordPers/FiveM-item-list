@@ -1,7 +1,7 @@
 {
   "name": "fivem-item-list-backend",
   "version": "1.0.0",
-  "description": "Backend s autentizací pro FiveM Item List (login + API pro spravu itemu). Bez externich zavislosti - staci Node.js 18+.",
+  "description": "Backend s autentizací pro FiveM Item List (login + API pro spravu itemu). Bez externich zavislosti krome volitelneho 'pg' pro Postgres/Neon ulozeni - staci Node.js 18+.",
   "main": "server.js",
   "type": "commonjs",
   "scripts": {
@@ -11,5 +11,7 @@
   "engines": {
     "node": ">=18"
   },
-  "dependencies": {}
+  "dependencies": {
+    "pg": "^8.7.0"
+  }
 }

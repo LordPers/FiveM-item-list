@@ -328,6 +328,26 @@ async function handlePutItem(req, res, id) {
   sendJson(res, 200, items[idx]);
 }
 
+async function handleBulkDeleteItems(req, res) {
+  if (!requireAuth(req, res)) return;
+  let body;
+  try {
+    body = await readJsonBody(req);
+  } catch (err) {
+    return sendJson(res, 400, { error: "Neplatný požadavek." });
+  }
+  const { ids } = body || {};
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return sendJson(res, 400, { error: "Chybí seznam ID ke smazání." });
+  }
+  const idSet = new Set(ids.map(String));
+  const items = readItems();
+  const remaining = items.filter((i) => !idSet.has(i.id));
+  const deleted = items.length - remaining.length;
+  if (deleted > 0) writeItems(remaining);
+  sendJson(res, 200, { deleted });
+}
+
 function handleDeleteItem(req, res, id) {
   if (!requireAuth(req, res)) return;
   const items = readItems();
@@ -336,6 +356,64 @@ function handleDeleteItem(req, res, id) {
   const [removed] = items.splice(idx, 1);
   writeItems(items);
   sendJson(res, 200, removed);
+}
+
+// Rozpozná dva běžné formáty Lua tabulek s itemy/vozidly:
+//
+// Formát A - klíčovaný objekt (typicky qb-core/esx/ox_inventory shared items):
+//   ["iron_pipe"] = { label = "Železná trubka", weight = 500 },
+//
+// Formát B - pole plochých objektů (typicky seznamy vozidel):
+//   { name = "Asbo", brand = "Maxwell", model = "asbo", price = 8500, hash = `asbo` },
+//
+// Obě varianty hledáme jen v "plochých" blocích {...} bez vnořených složených
+// závorek - díky tomu se korektně přeskočí obalové/kategorické tabulky jako
+// Customize.Vehicles = { ['compacts'] = { ...vnořené vozy... }, ['coupes'] = {...} },
+// které by jinak omylem vypadaly jako jeden item.
+function parseLuaItems(lua) {
+  const results = [];
+  const seenCodes = new Set();
+
+  function addResult(code, name) {
+    if (!code) return;
+    const key = String(code).toLowerCase();
+    if (seenCodes.has(key)) return;
+    seenCodes.add(key);
+    results.push({ name: name ? String(name) : String(code), code: String(code) });
+  }
+
+  // Formát A
+  const reA = /\[["']([a-zA-Z0-9_\-]+)["']\]\s*=\s*\{([^{}]*)\}/g;
+  let m;
+  while ((m = reA.exec(lua)) !== null) {
+    const code = m[1];
+    const body = m[2];
+    const labelMatch = body.match(/(?:label|name)\s*=\s*["']([^"']+)["']/);
+    addResult(code, labelMatch ? labelMatch[1] : code);
+  }
+
+  // Formát B
+  const reB = /\{([^{}]*)\}/g;
+  const fieldRe = /(\w+)\s*=\s*(?:'([^']*)'|"([^"]*)"|`([^`]*)`|(-?\d+\.?\d*))/g;
+  while ((m = reB.exec(lua)) !== null) {
+    const body = m[1];
+    const fields = {};
+    let f;
+    fieldRe.lastIndex = 0;
+    while ((f = fieldRe.exec(body)) !== null) {
+      const key = f[1].toLowerCase();
+      const value = f[2] !== undefined ? f[2] : f[3] !== undefined ? f[3] : f[4] !== undefined ? f[4] : f[5];
+      fields[key] = value;
+    }
+    const code =
+      fields.model || fields.spawn || fields.spawnname || fields.spawn_name ||
+      fields.spawncode || fields.spawn_code || fields.code;
+    if (!code) continue;
+    const name = fields.label || fields.name || code;
+    addResult(code, name);
+  }
+
+  return results;
 }
 
 async function handleImport(req, res) {
@@ -352,21 +430,24 @@ async function handleImport(req, res) {
   }
   const cat = VALID_CATEGORIES.includes(category) ? category : "ostatni";
 
-  const regex = /\[["']([a-zA-Z0-9_\-]+)["']\]\s*=\s*\{([^}]*)\}/g;
+  const parsed = parseLuaItems(lua);
   const items = readItems();
+  const existingCodes = new Set(items.map((i) => i.code.toLowerCase()));
   let added = 0;
-  let match;
-  while ((match = regex.exec(lua)) !== null) {
-    const code = match[1];
-    const bodyMatch = match[2];
-    const labelMatch = bodyMatch.match(/label\s*=\s*["']([^"']+)["']/);
-    const name = labelMatch ? labelMatch[1] : code;
-    items.push({ id: newId(), name, code, category: cat });
+  let skippedDuplicates = 0;
+  for (const p of parsed) {
+    const key = p.code.toLowerCase();
+    if (existingCodes.has(key)) {
+      skippedDuplicates++;
+      continue;
+    }
+    items.push({ id: newId(), name: p.name, code: p.code, category: cat });
+    existingCodes.add(key);
     added++;
   }
 
   if (added > 0) writeItems(items);
-  sendJson(res, 200, { added });
+  sendJson(res, 200, { added, skippedDuplicates });
 }
 
 // ---------------------------------------------------------------------------
@@ -394,6 +475,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (pathname === "/api/items/import" && req.method === "POST") {
       return await handleImport(req, res);
+    }
+    if (pathname === "/api/items/bulk-delete" && req.method === "POST") {
+      return await handleBulkDeleteItems(req, res);
     }
     const itemMatch = pathname.match(/^\/api\/items\/([a-f0-9]+)$/);
     if (itemMatch && req.method === "PUT") {

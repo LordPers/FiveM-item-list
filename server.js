@@ -17,16 +17,26 @@ const PUBLIC_DIR = path.join(__dirname, "public");
 
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME;
 const ADMIN_PASSWORD_HASH = process.env.ADMIN_PASSWORD_HASH;
+const DEVELOPER_USERNAME = process.env.DEVELOPER_USERNAME;
+const DEVELOPER_PASSWORD_HASH = process.env.DEVELOPER_PASSWORD_HASH;
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
 
-if (!ADMIN_USERNAME || !ADMIN_PASSWORD_HASH) {
+if (!ADMIN_USERNAME || !ADMIN_PASSWORD_HASH || !DEVELOPER_USERNAME || !DEVELOPER_PASSWORD_HASH) {
   console.error(
-    "Chybí ADMIN_USERNAME nebo ADMIN_PASSWORD_HASH v .env souboru.\n" +
+    "Chybí ADMIN_USERNAME/ADMIN_PASSWORD_HASH nebo DEVELOPER_USERNAME/DEVELOPER_PASSWORD_HASH v .env souboru.\n" +
     "Zkopíruj .env.example na .env, případně si vygeneruj vlastní hash heslem:\n" +
     "  npm run hash-password -- \"tvoje_heslo\"\n"
   );
   process.exit(1);
 }
+
+// Dva účty se dvěma úrovněmi oprávnění:
+//  - "viewer" (ADMIN_USERNAME/ADMIN_PASSWORD_HASH) - jen prohlížení, žádné úpravy.
+//  - "admin"  (DEVELOPER_USERNAME/DEVELOPER_PASSWORD_HASH) - plná práva (přidávat/mazat/importovat).
+const ACCOUNTS = {
+  [ADMIN_USERNAME]: { passwordHash: ADMIN_PASSWORD_HASH, role: "viewer" },
+  [DEVELOPER_USERNAME]: { passwordHash: DEVELOPER_PASSWORD_HASH, role: "admin" },
+};
 
 const VALID_CATEGORIES = ["auta", "drogy", "zbrane", "itemy", "jidlo", "obleceni", "joby", "ostatni"];
 
@@ -36,9 +46,9 @@ const VALID_CATEGORIES = ["auta", "drogy", "zbrane", "itemy", "jidlo", "obleceni
 const sessions = new Map();
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hodin
 
-function createSession(username) {
+function createSession(username, role) {
   const sid = crypto.randomBytes(32).toString("hex");
-  sessions.set(sid, { username, expiresAt: Date.now() + SESSION_TTL_MS });
+  sessions.set(sid, { username, role, expiresAt: Date.now() + SESSION_TTL_MS });
   return sid;
 }
 
@@ -242,16 +252,16 @@ async function handleLogin(req, res) {
     return sendJson(res, 400, { error: "Chybí uživatelské jméno nebo heslo." });
   }
 
-  const usernameMatches = username === ADMIN_USERNAME;
-  const passwordMatches = verifyPassword(password, ADMIN_PASSWORD_HASH);
+  const account = ACCOUNTS[username];
+  const passwordMatches = account ? verifyPassword(password, account.passwordHash) : false;
 
-  if (!usernameMatches || !passwordMatches) {
+  if (!account || !passwordMatches) {
     return sendJson(res, 401, { error: "Nesprávné uživatelské jméno nebo heslo." });
   }
 
-  const sid = createSession(username);
+  const sid = createSession(username, account.role);
   setSessionCookie(res, sid);
-  sendJson(res, 200, { ok: true, username });
+  sendJson(res, 200, { ok: true, username, role: account.role });
 }
 
 function handleLogout(req, res) {
@@ -264,7 +274,7 @@ function handleLogout(req, res) {
 function handleSession(req, res) {
   const session = getSessionFromRequest(req);
   if (session) {
-    return sendJson(res, 200, { authenticated: true, username: session.username });
+    return sendJson(res, 200, { authenticated: true, username: session.username, role: session.role });
   }
   sendJson(res, 200, { authenticated: false });
 }
@@ -278,13 +288,26 @@ function requireAuth(req, res) {
   return session;
 }
 
+// Stejné jako requireAuth, navíc vyžaduje roli "admin" (plná práva).
+// Účet "viewer" projde requireAuth (může si prohlížet), ale požadavky na
+// úpravu dat (přidání/mazání/import) skrz tohle projdou jen s rolí "admin".
+function requireWriteAuth(req, res) {
+  const session = requireAuth(req, res);
+  if (!session) return null;
+  if (session.role !== "admin") {
+    sendJson(res, 403, { error: "Tento účet má jen oprávnění k prohlížení." });
+    return null;
+  }
+  return session;
+}
+
 function handleGetItems(req, res) {
   if (!requireAuth(req, res)) return;
   sendJson(res, 200, readItems());
 }
 
 async function handlePostItem(req, res) {
-  if (!requireAuth(req, res)) return;
+  if (!requireWriteAuth(req, res)) return;
   let body;
   try {
     body = await readJsonBody(req);
@@ -308,7 +331,7 @@ async function handlePostItem(req, res) {
 }
 
 async function handlePutItem(req, res, id) {
-  if (!requireAuth(req, res)) return;
+  if (!requireWriteAuth(req, res)) return;
   let body;
   try {
     body = await readJsonBody(req);
@@ -329,7 +352,7 @@ async function handlePutItem(req, res, id) {
 }
 
 async function handleBulkDeleteItems(req, res) {
-  if (!requireAuth(req, res)) return;
+  if (!requireWriteAuth(req, res)) return;
   let body;
   try {
     body = await readJsonBody(req);
@@ -349,7 +372,7 @@ async function handleBulkDeleteItems(req, res) {
 }
 
 function handleDeleteItem(req, res, id) {
-  if (!requireAuth(req, res)) return;
+  if (!requireWriteAuth(req, res)) return;
   const items = readItems();
   const idx = items.findIndex((i) => i.id === id);
   if (idx === -1) return sendJson(res, 404, { error: "Item nenalezen." });
@@ -417,7 +440,7 @@ function parseLuaItems(lua) {
 }
 
 async function handleImport(req, res) {
-  if (!requireAuth(req, res)) return;
+  if (!requireWriteAuth(req, res)) return;
   let body;
   try {
     body = await readJsonBody(req);

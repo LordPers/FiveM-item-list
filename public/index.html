@@ -58,6 +58,9 @@
   button.primary{ background: var(--accent); color:#06210f; border-color: var(--accent); }
   button.primary:hover{ filter: brightness(1.08); }
   button.ghost{ background: transparent; }
+  button.danger{ background: var(--danger); color:#2b0505; border-color: var(--danger); }
+  button.danger:hover{ filter: brightness(1.08); }
+  button.danger:disabled{ background: var(--card-bg); color: var(--text-muted); border-color: var(--card-border); }
   button svg{flex-shrink:0;}
 
   .layout{ display:flex; min-height: calc(100vh - 70px); }
@@ -108,6 +111,15 @@
 
   .results-count{ font-size:13px; color: var(--text-secondary); margin-bottom: 14px; }
 
+  .bulk-bar{
+    display:flex; align-items:center; gap:16px; flex-wrap: wrap;
+    background: var(--card-bg); border:1px solid var(--card-border); border-radius: var(--radius);
+    padding: 10px 14px; margin-bottom: 14px; font-size: 13px; color: var(--text-secondary);
+  }
+  .bulk-select-all{ display:flex; align-items:center; gap:8px; cursor:pointer; user-select:none; }
+  .bulk-select-all input{ width:15px; height:15px; accent-color: var(--accent); cursor:pointer; }
+  .bulk-selected-count{ font-weight:600; color: var(--text-primary); margin-left: auto; }
+
   .grid{
     display:grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
     gap: 14px;
@@ -119,8 +131,10 @@
     position: relative;
   }
   .card:hover{ border-color: var(--card-border-hover); border-left-color: var(--accent); transform: translateY(-1px); }
+  .card.selected{ border-color: var(--accent); background: rgba(34,197,94,0.06); }
   .card-top{ display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom: 14px; }
   .card-top-left{ display:flex; align-items:center; gap:8px; }
+  .card-checkbox{ width:15px; height:15px; accent-color: var(--accent); cursor:pointer; flex-shrink:0; }
   .card-icon{
     width:26px; height:26px; border-radius:7px; background: var(--accent-dim);
     display:flex; align-items:center; justify-content:center; color: var(--accent); flex-shrink:0;
@@ -221,7 +235,7 @@
     <div class="sub">Zadej přihlašovací údaje pro přístup do databáze itemů.</div>
     <div class="form-group">
       <label>Uživatelské jméno</label>
-      <input type="text" id="loginUsername" autocomplete="username" placeholder="Username" />
+      <input type="text" id="loginUsername" autocomplete="username" placeholder="admin" />
     </div>
     <div class="form-group">
       <label>Heslo</label>
@@ -273,6 +287,16 @@
     <div class="search-wrap">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
       <input type="text" id="searchInput" placeholder="Hledat podle názvu nebo spawn kódu..." />
+    </div>
+
+    <div class="bulk-bar" id="bulkBar">
+      <label class="bulk-select-all">
+        <input type="checkbox" id="selectAllCheckbox" />
+        Vybrat vše (<span id="visibleCount">0</span>)
+      </label>
+      <span class="bulk-selected-count" id="bulkSelectedCount">Vybráno: 0</span>
+      <button class="danger" id="btnBulkDelete" disabled>Smazat vybrané</button>
+      <button class="ghost" id="btnClearSelection" disabled>Zrušit výběr</button>
     </div>
 
     <div class="results-count" id="resultsCount"></div>
@@ -438,10 +462,11 @@
     grid.style.display = "grid";
     filtered.forEach(item => {
       const card = document.createElement("div");
-      card.className = "card";
+      card.className = "card" + (selectedIds.has(item.id) ? " selected" : "");
       card.innerHTML = `
         <div class="card-top">
           <div class="card-top-left">
+            <input type="checkbox" class="card-checkbox" data-id="${item.id}" ${selectedIds.has(item.id) ? "checked" : ""} title="Vybrat item" />
             <div class="card-icon">${ICONS.box}</div>
             <span class="badge">${categoryLabel(item.category)}</span>
           </div>
@@ -465,7 +490,60 @@
     grid.querySelectorAll(".delete-btn").forEach(btn => {
       btn.addEventListener("click", () => deleteItem(btn.dataset.id));
     });
+    grid.querySelectorAll(".card-checkbox").forEach(cb => {
+      cb.addEventListener("change", () => toggleSelect(cb.dataset.id, cb.checked));
+    });
+    updateBulkBar(filtered);
   }
+
+  // ---------- Bulk selection ----------
+  let selectedIds = new Set();
+
+  function toggleSelect(id, checked){
+    if (checked) selectedIds.add(id);
+    else selectedIds.delete(id);
+    renderGrid();
+  }
+
+  function updateBulkBar(filtered){
+    const visibleIds = filtered.map(i => i.id);
+    const visibleSelectedCount = visibleIds.filter(id => selectedIds.has(id)).length;
+    document.getElementById("visibleCount").textContent = visibleIds.length;
+    document.getElementById("bulkSelectedCount").textContent = `Vybráno: ${selectedIds.size}`;
+    const selectAllCb = document.getElementById("selectAllCheckbox");
+    selectAllCb.checked = visibleIds.length > 0 && visibleSelectedCount === visibleIds.length;
+    selectAllCb.indeterminate = visibleSelectedCount > 0 && visibleSelectedCount < visibleIds.length;
+    document.getElementById("btnBulkDelete").disabled = selectedIds.size === 0;
+    document.getElementById("btnClearSelection").disabled = selectedIds.size === 0;
+  }
+
+  document.getElementById("selectAllCheckbox").addEventListener("change", (e) => {
+    const filtered = getFiltered();
+    if (e.target.checked){
+      filtered.forEach(i => selectedIds.add(i.id));
+    } else {
+      filtered.forEach(i => selectedIds.delete(i.id));
+    }
+    renderGrid();
+  });
+
+  document.getElementById("btnClearSelection").addEventListener("click", () => {
+    selectedIds.clear();
+    renderGrid();
+  });
+
+  document.getElementById("btnBulkDelete").addEventListener("click", async () => {
+    const count = selectedIds.size;
+    if (count === 0) return;
+    if (!confirm(`Opravdu smazat ${count} vybraných položek? Tuto akci nelze vzít zpět.`)) return;
+    try {
+      await api("/api/items/bulk-delete", { method: "POST", body: JSON.stringify({ ids: Array.from(selectedIds) }) });
+      selectedIds.clear();
+      await loadItems();
+    } catch (err) {
+      alert(`Mazání selhalo: ${err.message}`);
+    }
+  });
 
   function copyToClipboard(text, btn){
     const done = () => {
@@ -503,6 +581,7 @@
   async function deleteItem(id){
     if (!confirm("Opravdu smazat tento item?")) return;
     await api(`/api/items/${id}`, { method: "DELETE" });
+    selectedIds.delete(id);
     await loadItems();
   }
 
@@ -595,7 +674,7 @@
         statusEl.textContent = 'Nenašel jsem žádné položky ve formátu ["code"] = { label = "Název" }.';
       } else {
         statusEl.className = "status-msg ok";
-        statusEl.textContent = `Naimportováno ${result.added} položek.`;
+        statusEl.textContent = `Naimportováno ${result.added} položek${result.skippedDuplicates ? ` (${result.skippedDuplicates} už existovalo, přeskočeno)` : ""}.`;
         activeCategory = "vsechny";
         await loadItems();
       }

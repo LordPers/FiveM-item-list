@@ -1,0 +1,22 @@
+[
+  { "id": "a1b2c3d4e5f6", "name": "Benzoan sodný", "code": "sodium_benzoate", "category": "itemy" },
+  { "id": "b2c3d4e5f6a1", "name": "Stůl na Metanfetamin", "code": "meth_table", "category": "itemy" },
+  { "id": "c3d4e5f6a1b2", "name": "Stůl na Kokain", "code": "coke_table", "category": "itemy" },
+  { "id": "d4e5f6a1b2c3", "name": "Stůl na Trávu", "code": "weed_table", "category": "itemy" },
+  { "id": "e5f6a1b2c3d4", "name": "Stůl pro Chemikálie", "code": "chem_table", "category": "itemy" },
+  { "id": "f6a1b2c3d4e5", "name": "LED Lampa", "code": "light1", "category": "itemy" },
+  { "id": "a2b3c4d5e6f7", "name": "Lampa", "code": "light2", "category": "itemy" },
+  { "id": "b3c4d5e6f7a2", "name": "Hnojivo", "code": "fertilizer", "category": "itemy" },
+  { "id": "c4d5e6f7a2b3", "name": "Konev", "code": "water_can", "category": "itemy" },
+  { "id": "d5e6f7a2b3c4", "name": "Zapalovač", "code": "lighter", "category": "itemy" },
+  { "id": "e6f7a2b3c4d5", "name": "Bong", "code": "bong", "category": "itemy" },
+  { "id": "f7a2b3c4d5e6", "name": "SmokeWater™", "code": "bong_water", "category": "itemy" },
+  { "id": "a3b4c5d6e7f8", "name": "Sáček", "code": "plastic_bag", "category": "itemy" },
+  { "id": "b4c5d6e7f8a3", "name": "Balení Papírků", "code": "rolling_paper", "category": "itemy" },
+  { "id": "c5d6e7f8a3b4", "name": "client", "code": "client", "category": "itemy" },
+  { "id": "d6e7f8a3b4c5", "name": "Papírky", "code": "rolling_papers", "category": "itemy" },
+  { "id": "e7f8a3b4c5d6", "name": "Balíčka", "code": "joint_roller", "category": "itemy" },
+  { "id": "f8a3b4c5d6e7", "name": "Drtička", "code": "weed_grinder", "category": "itemy" },
+  { "id": "a4b5c6d7e8f9", "name": "Rozdrcená tráva", "code": "crushed_weed", "category": "itemy" },
+  { "id": "b5c6d7e8f9a4", "name": "Amoniak", "code": "ammonia", "category": "itemy" }
+]

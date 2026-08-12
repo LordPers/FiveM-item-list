@@ -696,6 +696,12 @@
     const lua = document.getElementById("luaInput").value;
     const category = importCategorySel.value;
     const statusEl = document.getElementById("importStatus");
+    const btnRunImport = document.getElementById("btnRunImport");
+    const originalLabel = btnRunImport.textContent;
+    btnRunImport.disabled = true;
+    btnRunImport.textContent = "Importuji…";
+    statusEl.className = "status-msg";
+    statusEl.textContent = "Probíhá import, u větších souborů to může chvíli trvat…";
     try {
       const result = await api("/api/items/import", { method: "POST", body: JSON.stringify({ lua, category }) });
       if (result.added === 0){
@@ -710,6 +716,9 @@
     } catch (err) {
       statusEl.className = "status-msg err";
       statusEl.textContent = err.message;
+    } finally {
+      btnRunImport.disabled = false;
+      btnRunImport.textContent = originalLabel;
     }
   });
 

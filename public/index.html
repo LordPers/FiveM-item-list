@@ -170,6 +170,13 @@
     border-radius:8px; padding: 10px 12px; font-size:13.5px; font-family: inherit; outline:none;
   }
   .form-group textarea{ font-family: "SF Mono", Consolas, monospace; min-height: 140px; resize: vertical; }
+  .form-group input[type="file"]{ padding: 8px 10px; font-size: 12.5px; color: var(--text-secondary); }
+  .form-group input[type="file"]::file-selector-button{
+    font-family: inherit; cursor:pointer; border-radius: 6px; font-size: 12.5px; font-weight:600;
+    padding: 6px 12px; margin-right: 10px; border: 1px solid var(--card-border); background: var(--card-bg);
+    color: var(--text-primary);
+  }
+  .form-group input[type="file"]::file-selector-button:hover{ background:#161d28; }
   .form-group input:focus, .form-group select:focus, .form-group textarea:focus{ border-color: var(--accent-border); }
   .modal-actions{ display:flex; justify-content:flex-end; gap:10px; margin-top:18px; }
   .hint{ font-size:11.5px; color: var(--text-muted); margin-top:6px; line-height:1.5; }
@@ -214,7 +221,7 @@
     <div class="sub">Zadej přihlašovací údaje pro přístup do databáze itemů.</div>
     <div class="form-group">
       <label>Uživatelské jméno</label>
-      <input type="text" id="loginUsername" autocomplete="username" placeholder="admin" />
+      <input type="text" id="loginUsername" autocomplete="username" placeholder="Username" />
     </div>
     <div class="form-group">
       <label>Heslo</label>
@@ -309,12 +316,17 @@
 <div class="overlay" id="importOverlay">
   <div class="modal">
     <h2>Import .lua</h2>
-    <div class="sub">Vlož obsah Lua tabulky s itemy (např. z ox_inventory / qb-core / esx shared items).</div>
+    <div class="sub">Nahraj .lua soubor, nebo obsah Lua tabulky s itemy vlož ručně (např. z ox_inventory / qb-core / esx shared items).</div>
+    <div class="form-group">
+      <label>Soubor .lua</label>
+      <input type="file" id="luaFileInput" accept=".lua,text/plain" />
+      <div class="hint" id="luaFileHint"></div>
+    </div>
     <div class="form-group">
       <label>Lua obsah</label>
       <textarea id="luaInput" placeholder='["iron_pipe"] = { label = "Železná trubka", weight = 500 },
 ["lockpick"] = { label = "Šperhák" },'></textarea>
-      <div class="hint">Podporuje formát <code>["spawn_code"] = { label = "Název", ... }</code>.</div>
+      <div class="hint">Podporuje formát <code>["spawn_code"] = { label = "Název", ... }</code>. Nahrání souboru výše obsah automaticky vyplní sem, klidně ho ale i doplň/uprav ručně.</div>
     </div>
     <div class="form-group">
       <label>Kategorie pro importované itemy</label>
@@ -551,9 +563,26 @@
   document.getElementById("btnImport").addEventListener("click", () => {
     document.getElementById("luaInput").value = "";
     document.getElementById("importStatus").textContent = "";
+    document.getElementById("luaFileInput").value = "";
+    document.getElementById("luaFileHint").textContent = "";
     importOverlay.classList.add("open");
   });
   document.getElementById("btnCancelImport").addEventListener("click", () => importOverlay.classList.remove("open"));
+
+  document.getElementById("luaFileInput").addEventListener("change", (e) => {
+    const file = e.target.files && e.target.files[0];
+    const fileHint = document.getElementById("luaFileHint");
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      document.getElementById("luaInput").value = reader.result;
+      fileHint.textContent = `Načteno ze souboru: ${file.name} (${(file.size / 1024).toFixed(1)} kB)`;
+    };
+    reader.onerror = () => {
+      fileHint.textContent = "Soubor se nepodařilo přečíst, zkus ho vložit ručně jako text.";
+    };
+    reader.readAsText(file, "utf-8");
+  });
 
   document.getElementById("btnRunImport").addEventListener("click", async () => {
     const lua = document.getElementById("luaInput").value;

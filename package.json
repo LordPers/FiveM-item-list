@@ -1,0 +1,15 @@
+{
+  "name": "fivem-item-list-backend",
+  "version": "1.0.0",
+  "description": "Backend s autentizací pro FiveM Item List (login + API pro spravu itemu). Bez externich zavislosti - staci Node.js 18+.",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "hash-password": "node scripts/hash-password.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {}
+}

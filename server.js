@@ -28,7 +28,7 @@ if (!ADMIN_USERNAME || !ADMIN_PASSWORD_HASH) {
   process.exit(1);
 }
 
-const VALID_CATEGORIES = ["auta", "drogy", "zbrane", "itemy", "jidlo", "obleceni", "ostatni"];
+const VALID_CATEGORIES = ["auta", "drogy", "zbrane", "itemy", "jidlo", "obleceni", "joby", "ostatni"];
 
 // ---------------------------------------------------------------------------
 // In-memory session store: sid -> { username, expiresAt }

@@ -62,6 +62,31 @@ function ensureDataFile() {
   }
 }
 
+// Hromadně vloží itemy v dávkách (max. 500 řádků na jeden INSERT), místo
+// samostatného dotazu pro každou položku. Kritické hlavně pro import
+// z .lua - u stovek položek by jeden dotaz na položku byl na Neonu (nebo
+// jakémkoli vzdáleném Postgresu) hrozně pomalý kvůli latenci každého
+// samostatného round-tripu.
+async function bulkInsertItems(queryable, items, { onConflictDoNothing = false } = {}) {
+  const CHUNK_SIZE = 500;
+  const conflictClause = onConflictDoNothing ? " ON CONFLICT (id) DO NOTHING" : "";
+  for (let start = 0; start < items.length; start += CHUNK_SIZE) {
+    const chunk = items.slice(start, start + CHUNK_SIZE);
+    const values = [];
+    const placeholders = chunk
+      .map((item, i) => {
+        const base = i * 4;
+        values.push(item.id, item.name, item.code, item.category);
+        return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4})`;
+      })
+      .join(", ");
+    await queryable.query(
+      `INSERT INTO items (id, name, code, category) VALUES ${placeholders}${conflictClause}`,
+      values
+    );
+  }
+}
+
 // Vytvoří tabulku "items" v Postgresu, pokud ještě neexistuje, a při prvním
 // spuštění (prázdná tabulka) ji naplní stejnými počátečními daty jako
 // souborový režim. Používá se jen v režimu Postgres.
@@ -80,11 +105,8 @@ async function ensureDbSchema() {
     const seedFile = path.join(__dirname, "data", "items.json");
     if (fs.existsSync(seedFile)) {
       const seedItems = JSON.parse(fs.readFileSync(seedFile, "utf-8"));
-      for (const item of seedItems) {
-        await pool.query(
-          "INSERT INTO items (id, name, code, category) VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO NOTHING",
-          [item.id, item.name, item.code, item.category]
-        );
+      if (seedItems.length > 0) {
+        await bulkInsertItems(pool, seedItems, { onConflictDoNothing: true });
       }
     }
   }
@@ -188,11 +210,8 @@ async function writeItems(items) {
     try {
       await client.query("BEGIN");
       await client.query("DELETE FROM items");
-      for (const item of items) {
-        await client.query(
-          "INSERT INTO items (id, name, code, category) VALUES ($1, $2, $3, $4)",
-          [item.id, item.name, item.code, item.category]
-        );
+      if (items.length > 0) {
+        await bulkInsertItems(client, items);
       }
       await client.query("COMMIT");
     } catch (err) {
